@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from typing import Tuple
+from typing import TYPE_CHECKING, Tuple
 
-from aiohttp_socks import ProxyType
+from .proxy_type import ProxyType
 
-from .proxy import Proxy
+if TYPE_CHECKING:
+    from .proxy import Proxy
 
 PROTOCOL_ORDER = (ProxyType.HTTP, ProxyType.SOCKS4, ProxyType.SOCKS5)
 
@@ -14,7 +15,11 @@ def protocol_sort_key(proxy: Proxy, /) -> Tuple[int, ProxyType]:
 
 
 def natural_sort_key(proxy: Proxy, /) -> Tuple[int, ...]:
-    return (proxy.protocol.value, *map(int, proxy.host.split(".")), proxy.port)
+    return (
+        tuple(ProxyType.__members__).index(proxy.protocol._name_),
+        *map(int, proxy.host.split(".")),
+        proxy.port,
+    )
 
 
 def timeout_sort_key(proxy: Proxy, /) -> float:

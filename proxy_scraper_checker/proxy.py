@@ -1,23 +1,18 @@
 from __future__ import annotations
 
-import json
 from io import StringIO
 from time import perf_counter
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import attrs
-from aiohttp import ClientSession
-from aiohttp_socks import ProxyConnector, ProxyType
 
-from .http import (
-    HEADERS,
-    SSL_CONTEXT,
-    fallback_charset_resolver,
-    get_cookie_jar,
-    get_response_text,
-)
 from .parsers import parse_ipv4
 from .settings import CheckWebsiteType, Settings
+
+if TYPE_CHECKING:
+    from curl_cffi.requests import AsyncSession
+
+    from .proxy_type import ProxyType
 
 
 @attrs.define(
@@ -37,39 +32,24 @@ class Proxy:
     timeout: float = attrs.field(init=False, eq=False)
     exit_ip: Optional[str] = attrs.field(init=False, eq=False)
 
-    async def check(self, *, settings: Settings) -> None:
+    async def check(self, *, session: AsyncSession, settings: Settings) -> None:
         async with settings.semaphore:
             start = perf_counter()
-            connector = ProxyConnector(
-                proxy_type=self.protocol,
-                host=self.host,
-                port=self.port,
-                username=self.username,
-                password=self.password,
-                ssl=SSL_CONTEXT,
-            )
-            async with ClientSession(
-                connector=connector,
-                headers=HEADERS,
-                cookie_jar=get_cookie_jar(),
-                raise_for_status=True,
-                timeout=settings.timeout,
-                fallback_charset_resolver=fallback_charset_resolver,
-            ) as session, session.get(
+            response = await session.request(
+                "GET",
                 settings.check_website,
                 headers=settings.check_website_type.headers,
-            ) as response:
-                content = await response.read()
+                timeout=settings.timeout,
+                proxy=f"{self.protocol._value_}://{self.username}:{self.password}@{self.host}:{self.port}"
+                if self.username is not None and self.password is not None
+                else f"{self.protocol._value_}://{self.host}:{self.port}",
+            )
+        response.raise_for_status()
         self.timeout = perf_counter() - start
         if settings.check_website_type == CheckWebsiteType.HTTPBIN_IP:
-            r = json.loads(
-                get_response_text(response=response, content=content)
-            )
-            self.exit_ip = parse_ipv4(r["origin"])
+            self.exit_ip = parse_ipv4(response.json()["origin"])
         elif settings.check_website_type == CheckWebsiteType.PLAIN_IP:
-            self.exit_ip = parse_ipv4(
-                get_response_text(response=response, content=content)
-            )
+            self.exit_ip = parse_ipv4(response.text)
         else:
             self.exit_ip = None
 

@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Mapping
-
-from aiohttp_socks import ProxyType
-from rich.progress import Progress, TaskID
+from typing import TYPE_CHECKING, Mapping
 
 from . import sort
-from .proxy import Proxy
-from .settings import Settings
-from .storage import ProxyStorage
+
+if TYPE_CHECKING:
+    from curl_cffi.requests import AsyncSession
+    from rich.progress import Progress, TaskID
+
+    from .proxy import Proxy
+    from .proxy_type import ProxyType
+    from .settings import Settings
+    from .storage import ProxyStorage
 
 logger = logging.getLogger(__name__)
 
@@ -19,12 +22,13 @@ async def check_one(
     *,
     progress: Progress,
     proxy: Proxy,
+    session: AsyncSession,
     settings: Settings,
     storage: ProxyStorage,
     task: TaskID,
 ) -> None:
     try:
-        await proxy.check(settings=settings)
+        await proxy.check(session=session, settings=settings)
     except Exception as e:
         # Too many open files
         if isinstance(e, OSError) and e.errno == 24:  # noqa: PLR2004
@@ -39,6 +43,7 @@ async def check_one(
 
 async def check_all(
     *,
+    session: AsyncSession,
     settings: Settings,
     storage: ProxyStorage,
     progress: Progress,
@@ -59,6 +64,7 @@ async def check_all(
             check_one(
                 progress=progress,
                 proxy=proxy,
+                session=session,
                 settings=settings,
                 storage=storage,
                 task=progress_tasks[proxy.protocol],

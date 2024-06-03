@@ -7,17 +7,19 @@ from typing import TYPE_CHECKING, Callable, Coroutine, Dict, Mapping
 
 import aiofiles
 import rich.traceback
-from aiohttp import ClientSession, TCPConnector
-from aiohttp_socks import ProxyType
+from curl_cffi.requests import AsyncSession
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn
 from rich.table import Table
 from typing_extensions import Any, TypeVar
 
-from . import checker, geodb, http, output, scraper, sort, utils
+from . import checker, geodb, output, scraper, sort, utils
 from .settings import Settings
 from .storage import ProxyStorage
+
+if TYPE_CHECKING:
+    from .proxy_type import ProxyType
 
 if sys.version_info >= (3, 11):
     try:
@@ -111,12 +113,11 @@ async def main() -> None:
     console = Console()
     configure_logging(console=console, debug=cfg["debug"])
 
-    async with ClientSession(
-        connector=TCPConnector(ssl=http.SSL_CONTEXT),
-        headers=http.HEADERS,
-        cookie_jar=http.get_cookie_jar(),
-        raise_for_status=True,
-        fallback_charset_resolver=http.fallback_charset_resolver,
+    async with AsyncSession(
+        max_clients=cfg["max_connections"],
+        max_redirects=30,
+        impersonate="chrome",
+        default_encoding=utils.bytes_decode,
     ) as session:
         settings = await Settings.from_mapping(cfg, session=session)
         storage = ProxyStorage(protocols=settings.sources)
@@ -143,9 +144,9 @@ async def main() -> None:
                 if settings.enable_geolocation
                 else scrape
             )
-            await session.close()
             count_before_checking = storage.get_count()
             await checker.check_all(
+                session=session,
                 settings=settings,
                 storage=storage,
                 progress=progress,

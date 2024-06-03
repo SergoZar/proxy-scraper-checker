@@ -4,7 +4,6 @@ import asyncio
 import enum
 import json
 import logging
-import math
 import stat
 import sys
 from pathlib import Path
@@ -24,17 +23,17 @@ from urllib.parse import urlparse
 
 import attrs
 import platformdirs
-from aiohttp import ClientSession, ClientTimeout, hdrs
-from aiohttp_socks import ProxyType
 from typing_extensions import Any, Literal, Self
 
 from . import fs, sort
-from .http import get_response_text
 from .null_context import NullContext
 from .parsers import parse_ipv4
+from .proxy_type import ProxyType
 from .utils import IS_DOCKER
 
 if TYPE_CHECKING:
+    from curl_cffi.requests import AsyncSession
+
     from .proxy import Proxy
 
 logger = logging.getLogger(__name__)
@@ -99,10 +98,6 @@ def _semaphore_converter(
     return asyncio.Semaphore(v) if v else NullContext()
 
 
-def _timeout_converter(value: float, /) -> ClientTimeout:
-    return ClientTimeout(total=value, sock_connect=math.inf)
-
-
 def _sources_converter(
     value: Mapping[ProxyType, Optional[Iterable[str]]], /
 ) -> Dict[ProxyType, FrozenSet[str]]:
@@ -121,7 +116,7 @@ class CheckWebsiteType(enum.Enum):
         enum.auto(),
         True,
         True,
-        MappingProxyType({hdrs.ACCEPT: "application/json"}),
+        MappingProxyType({"Accept": "application/json"}),
     )
     """https://httpbin.org/ip"""
 
@@ -144,15 +139,14 @@ class CheckWebsiteType(enum.Enum):
 
 
 async def _get_check_website_type_and_real_ip(
-    *, check_website: str, session: ClientSession
+    *, check_website: str, session: AsyncSession
 ) -> Union[
     Tuple[Literal[CheckWebsiteType.UNKNOWN], None],
     Tuple[Literal[CheckWebsiteType.PLAIN_IP, CheckWebsiteType.HTTPBIN_IP], str],
 ]:
     try:
-        async with session.get(check_website) as response:
-            content = await response.read()
-        text = get_response_text(response=response, content=content)
+        r = await session.get(check_website)
+        text = r.text
     except Exception:
         logger.exception(
             "Error when opening check_website without proxy, it will be "
@@ -230,7 +224,7 @@ class Settings:
         ),
         converter=_sources_converter,
     )
-    timeout: ClientTimeout = attrs.field(converter=_timeout_converter)
+    timeout: float = attrs.field(validator=attrs.validators.gt(0))
 
     @property
     def sorting_key(
@@ -269,20 +263,9 @@ class Settings:
                 "It is recommended to use https for correct checking."
             )
 
-    @timeout.validator
-    def _validate_timeout(
-        self,
-        attribute: attrs.Attribute[str],  # noqa: ARG002
-        value: float,  # noqa: ARG002
-        /,
-    ) -> None:
-        if self.timeout.total is None or self.timeout.total <= 0:
-            msg = "timeout must be positive"
-            raise ValueError(msg)
-
     @classmethod
     async def from_mapping(
-        cls, cfg: Mapping[str, Any], /, *, session: ClientSession
+        cls, cfg: Mapping[str, Any], /, *, session: AsyncSession
     ) -> Self:
         output_path = (
             platformdirs.user_data_path("proxy_scraper_checker")

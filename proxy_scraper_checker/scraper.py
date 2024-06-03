@@ -3,18 +3,21 @@ from __future__ import annotations
 import asyncio
 import itertools
 import logging
+from typing import TYPE_CHECKING
 
 import aiofiles
-from aiohttp import ClientResponseError, ClientSession, ClientTimeout
-from aiohttp_socks import ProxyType
-from rich.progress import Progress, TaskID
 
-from .http import get_response_text
 from .parsers import PROXY_REGEX
 from .proxy import Proxy
-from .settings import Settings
-from .storage import ProxyStorage
+from .proxy_type import ProxyType
 from .utils import bytes_decode, is_http_url
+
+if TYPE_CHECKING:
+    from curl_cffi.requests import AsyncSession
+    from rich.progress import Progress, TaskID
+
+    from .settings import Settings
+    from .storage import ProxyStorage
 
 logger = logging.getLogger(__name__)
 
@@ -23,25 +26,21 @@ async def scrape_one(
     *,
     progress: Progress,
     proto: ProxyType,
-    session: ClientSession,
+    session: AsyncSession,
     source: str,
     storage: ProxyStorage,
     task: TaskID,
-    timeout: ClientTimeout,
+    timeout: float,
 ) -> None:
     try:
         if is_http_url(source):
-            async with session.get(source, timeout=timeout) as response:
-                content = await response.read()
-            text = get_response_text(response=response, content=content)
+            r = await session.get(source, timeout=timeout)
+            r.raise_for_status()
+            text = r.text
         else:
             async with aiofiles.open(source, "rb") as f:
                 content = await f.read()
             text = bytes_decode(content)
-    except ClientResponseError as e:
-        logger.warning(
-            "%s | HTTP status code %d: %s", source, e.status, e.message
-        )
     except Exception as e:
         logger.warning(
             "%s | %s.%s: %s",
@@ -79,7 +78,7 @@ async def scrape_one(
 async def scrape_all(
     *,
     progress: Progress,
-    session: ClientSession,
+    session: AsyncSession,
     settings: Settings,
     storage: ProxyStorage,
 ) -> None:
@@ -89,7 +88,6 @@ async def scrape_all(
         )
         for proto, sources in settings.sources.items()
     }
-    timeout = ClientTimeout(total=settings.source_timeout)
     await asyncio.gather(
         *(
             scrape_one(
@@ -99,7 +97,7 @@ async def scrape_all(
                 source=source,
                 storage=storage,
                 task=progress_tasks[proto],
-                timeout=timeout,
+                timeout=settings.source_timeout,
             )
             for proto, sources in settings.sources.items()
             for source in sources
